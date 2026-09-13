@@ -930,3 +930,29 @@ class TestDeferredCallSchemaProbe:
         }, calls)
 
         assert validate_deferred_call_args(name, {"payload": {"anything": True}}) is None
+
+
+
+def test_normalize_tool_call_entries_treats_empty_string_arguments_as_no_arguments():
+    from tools.tool_search_validation import normalize_tool_call_entries
+    for blank in ("", "   ", "\n"):
+        entries, err = normalize_tool_call_entries({"name": "mcp__example__get", "arguments": blank})
+        assert err is None, err
+        assert entries == [{"name": "mcp__example__get", "arguments": {}}]
+
+
+def test_normalize_tool_call_entries_invalid_json_error_is_actionable():
+    from tools.tool_search_validation import normalize_tool_call_entries
+    entries, err = normalize_tool_call_entries({"name": "mcp__example__get", "arguments": "{not json"})
+    assert entries == []
+    assert "is not valid JSON" in err
+    assert "JSON object string" in err
+    assert 'tool_describe("mcp__example__get")' in err
+
+
+def test_normalize_tool_call_entries_non_object_error_names_the_tool():
+    from tools.tool_search_validation import normalize_tool_call_entries
+    entries, err = normalize_tool_call_entries({"name": "mcp__example__get", "arguments": "[1, 2]"})
+    assert entries == []
+    assert "must be a JSON object" in err
+    assert 'tool_describe("mcp__example__get")' in err

@@ -169,11 +169,26 @@ def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, An
         if raw_args is None:
             raw_args = {}
         if isinstance(raw_args, str):
-            try:
-                raw_args = json.loads(raw_args)
-            except json.JSONDecodeError as e:
-                return [], f"tool_call calls[{position}].arguments is not valid JSON: {e}"
+            # An empty/whitespace string is the most common malformed shape a model emits
+            # for "no arguments" (observed repeated verbatim until the loop guardrail fired).
+            # It carries no information, so treat it as the empty object rather than as a
+            # JSON parse failure the model cannot act on.
+            if not raw_args.strip():
+                raw_args = {}
+            else:
+                try:
+                    raw_args = json.loads(raw_args)
+                except json.JSONDecodeError as e:
+                    return [], (
+                        f"tool_call calls[{position}].arguments is not valid JSON ({e}). "
+                        "Send the underlying tool's arguments as a JSON object string, e.g. "
+                        '\'{"id": "..."}\' — or "{}" for no arguments. Use tool_describe("'
+                        f"{name}\") to see the expected fields."
+                    )
         if not isinstance(raw_args, dict):
-            return [], f"tool_call calls[{position}].arguments must be an object"
+            return [], (
+                f"tool_call calls[{position}].arguments must be a JSON object (got "
+                f"{type(raw_args).__name__}). Use tool_describe(\"{name}\") to see the expected fields."
+            )
         entries.append({"name": name, "arguments": raw_args})
     return entries, None
