@@ -133,14 +133,25 @@ class ToolCallGuardrailConfig:
 
     @classmethod
     def from_mapping(
-        cls, data: Mapping[str, Any] | None, *, platform: str | None = None,
+        cls,
+        data: Mapping[str, Any] | None,
+        *,
+        platform: str | None = None,
+        unattended: bool = False,
     ) -> "ToolCallGuardrailConfig":
-        """Build config from `tool_loop_guardrails`; nested ``warn_after`` / ``hard_stop_after`` win over flat legacy keys."""
+        """Build guardrail config, accounting for invocation attendance.
+
+        ``unattended`` is independent of the user-facing platform. For example,
+        ``hermes -z`` keeps CLI toolsets and session provenance, but no operator
+        is present to react to warning-only loop guidance.
+        """
         if not isinstance(data, Mapping):
             data = {}
         d = cls()
         flags = {name: _as_bool(data.get(name), getattr(d, name)) for name in _BOOL_FIELDS}
-        if flags["non_interactive_hard_stop_enabled"] and _is_non_interactive_platform(platform):
+        if flags["non_interactive_hard_stop_enabled"] and (
+            unattended or _is_non_interactive_platform(platform)
+        ):
             flags["hard_stop_enabled"] = True
 
         def threshold(name: str, section_name: str, key: str) -> int:

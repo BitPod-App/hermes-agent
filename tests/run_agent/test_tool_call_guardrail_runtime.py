@@ -43,6 +43,7 @@ def _make_agent(
     max_iterations: int = 10,
     config: dict | None = None,
     platform: str | None = None,
+    unattended: bool = False,
 ) -> AIAgent:
     with (
         patch("model_tools.get_tool_definitions", return_value=_make_tool_defs(*tool_names)),
@@ -59,6 +60,7 @@ def _make_agent(
             skip_context_files=True,
             skip_memory=True,
             platform=platform or "cli",
+            unattended=unattended,
         )
     agent.client = MagicMock()
     agent._cached_system_prompt = "You are helpful."
@@ -92,6 +94,91 @@ def _hard_stop_config(**overrides) -> dict:
     }
     cfg["tool_loop_guardrails"].update(overrides)
     return cfg
+
+
+def _malformed_deferred_call_result(name, args, _task_id, **_kwargs):
+    """Execute the observed bridge parse seam without reaching an external MCP server."""
+    if name != "tool_call":
+        return json.dumps({"ok": True})
+    assert args == {"name": "mcp__linear__get_issue", "arguments": ""}
+    return json.dumps({
+        "error": "tool_call 'arguments' is not valid JSON: "
+        "Expecting value: line 1 column 1 (char 0)"
+    })
+
+
+def test_unattended_cli_halts_empty_nested_tool_call_arguments_and_marks_failure():
+    """BIT-1334: native ``hermes -z`` must not warn forever on malformed bridge JSON."""
+    agent = _make_agent("tool_call", max_iterations=20, unattended=True)
+    malformed = json.dumps({"name": "mcp__linear__get_issue", "arguments": ""})
+    agent.client.chat.completions.create.side_effect = [
+        _mock_response(
+            content="",
+            finish_reason="tool_calls",
+            tool_calls=[_mock_tool_call("tool_call", malformed, f"call-{i}")],
+        )
+        for i in range(1, 21)
+    ]
+
+    with (
+        patch("model_tools.handle_function_call", side_effect=_malformed_deferred_call_result) as dispatch,
+        patch.object(agent, "_persist_session"),
+        patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        result = agent.run_conversation("review the source")
+
+    # Five real byte-identical failures reach the unattended hard-stop bound.
+    # No sixth model request or external MCP dispatch is allowed.
+    assert dispatch.call_count == 5
+    assert result["api_calls"] == 5
+    assert result["turn_exit_reason"] == "guardrail_halt"
+    assert result["guardrail"]["code"] == "identical_call_streak_halt"
+    assert result["failed"] is True
+    assert result["completed"] is False
+    assert result["failure_reason"] == "tool_guardrail:identical_call_streak_halt"
+    assert result["error"] == result["final_response"]
+    assert "stopped retrying" in result["final_response"]
+    tool_rows = [message for message in result["messages"] if message.get("role") == "tool"]
+    assert len(tool_rows) == 5
+    assert all(message["tool_name"] == "tool_call" for message in tool_rows)
+    assert "not valid JSON" in tool_rows[0]["content"]
+    assert "identical_call_streak_halt" in tool_rows[-1]["content"]
+
+
+def test_unattended_cli_keeps_valid_followup_after_one_malformed_call():
+    """A recoverable error followed by a different valid call remains normal progress."""
+    agent = _make_agent("tool_call", "web_search", max_iterations=10, unattended=True)
+    malformed = json.dumps({"name": "mcp__linear__get_issue", "arguments": ""})
+    responses = [
+        _mock_response(
+            content="",
+            finish_reason="tool_calls",
+            tool_calls=[_mock_tool_call("tool_call", malformed, "call-bad")],
+        ),
+        _mock_response(
+            content="",
+            finish_reason="tool_calls",
+            tool_calls=[_mock_tool_call("web_search", json.dumps({"query": "different"}), "call-good")],
+        ),
+        _mock_response(content="done", finish_reason="stop", tool_calls=None),
+    ]
+    agent.client.chat.completions.create.side_effect = responses
+
+    with (
+        patch("model_tools.handle_function_call", side_effect=_malformed_deferred_call_result) as dispatch,
+        patch.object(agent, "_persist_session"),
+        patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        result = agent.run_conversation("recover and continue")
+
+    assert dispatch.call_count == 2
+    assert result["turn_exit_reason"].startswith("text_response")
+    assert result["failed"] is False
+    assert result["completed"] is True
+    assert result["final_response"] == "done"
+    assert "guardrail" not in result
 
 
 def test_gateway_platform_uses_hard_stop_default_without_cli_opt_in():

@@ -1157,7 +1157,7 @@ def _init_session_state(agent, session_id, session_db, parent_session_id, reason
     agent._todo_store = TodoStore()
 
 
-def _apply_display_config(agent, _agent_cfg, platform):
+def _apply_display_config(agent, _agent_cfg, platform, *, unattended: bool = False):
     # show_commentary: Codex phase=commentary → interim path (true) or reasoning channel.
     agent.show_commentary = bool(_cfg_dict(_agent_cfg, "display").get("show_commentary", True))
 
@@ -1187,7 +1187,9 @@ def _apply_display_config(agent, _agent_cfg, platform):
     try:
         agent._tool_guardrails = ToolCallGuardrailController(
             ToolCallGuardrailConfig.from_mapping(
-                _agent_cfg.get("tool_loop_guardrails", {}), platform=platform,
+                _agent_cfg.get("tool_loop_guardrails", {}),
+                platform=platform,
+                unattended=unattended,
             )
         )
     except Exception as _tlg_err:
@@ -2205,6 +2207,7 @@ def init_agent(
     checkpoint_max_snapshots: int = 20, checkpoint_max_total_size_mb: int = 500,
     checkpoint_max_file_size_mb: int = 10, pass_session_id: bool = False,
     requested_provider: str = None, capabilities: Optional[Dict[str, bool]] = None,
+    unattended: bool = False,
 ):
     """Initialize the AI Agent (body of :meth:`AIAgent.__init__`).
 
@@ -2291,7 +2294,7 @@ def init_agent(
     except Exception:
         _agent_cfg = {}
 
-    _apply_display_config(agent, _agent_cfg, platform)
+    _apply_display_config(agent, _agent_cfg, platform, unattended=unattended)
     _init_memory(agent, _agent_cfg, skip_memory, platform)
     _apply_agent_section(agent, _agent_cfg)
     cs = _parse_compression_config(agent, _agent_cfg)

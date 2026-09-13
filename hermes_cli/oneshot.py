@@ -28,7 +28,8 @@ _ALL_TOOLSETS = {"all", "*"}
 _USAGE_KEYS = (
     "estimated_cost_usd", "cost_status", "cost_source", "input_tokens", "output_tokens",
     "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "total_tokens", "api_calls",
-    "model", "provider", "session_id", "completed",
+    "model", "provider", "session_id", "completed", "turn_exit_reason", "failure_reason",
+    "guardrail",
 )
 
 
@@ -256,9 +257,13 @@ def run_oneshot(
             real_stdout.write("\n")
         real_stdout.flush()
 
+    # A controlled halt carries a useful explanatory response, but it did not
+    # complete the requested work. Preserve that response on stdout and return
+    # non-zero so launchd/cron/subprocess callers cannot record false success.
+    if result.get("failed") or result.get("partial"):
+        return 2
+
     if not (response or "").strip():
-        if result.get("failed") or result.get("partial"):
-            return 2
         real_stderr.write("hermes -z: no final response was produced; treating the run as failed.\n")
         real_stderr.flush()
         return 1
@@ -482,6 +487,9 @@ def _run_agent(
             enabled_toolsets=toolsets_list,
             quiet_mode=True,
             platform="cli",
+            # Keep CLI toolsets and session provenance while arming the default
+            # hard stop required by a process with no operator at the terminal.
+            unattended=True,
             session_db=session_db,
             session_id=resume_sid,
             credential_pool=runtime.get("credential_pool"),

@@ -98,6 +98,18 @@ def test_non_interactive_hard_stop_can_be_disabled_explicitly():
     assert cfg.non_interactive_hard_stop_enabled is False
 
 
+def test_unattended_cli_arms_default_hard_stop_but_preserves_explicit_opt_out():
+    armed = ToolCallGuardrailConfig.from_mapping({}, platform="cli", unattended=True)
+    opted_out = ToolCallGuardrailConfig.from_mapping(
+        {"non_interactive_hard_stop_enabled": False},
+        platform="cli",
+        unattended=True,
+    )
+
+    assert armed.hard_stop_enabled is True
+    assert opted_out.hard_stop_enabled is False
+
+
 def test_default_repeated_identical_failed_call_warns_without_blocking():
     controller = ToolCallGuardrailController()
     args = {"query": "same"}

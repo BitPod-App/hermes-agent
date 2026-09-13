@@ -162,6 +162,10 @@ def run_tool_round(
     if agent._tool_guardrail_halt_decision is not None:
         decision = agent._tool_guardrail_halt_decision
         _turn_exit_reason = "guardrail_halt"
+        # A controlled halt is a truthful failure, not task completion. This is
+        # load-bearing for unattended callers, which otherwise exit zero after
+        # printing the synthesized explanation and can publish false success.
+        failed = True
         final_response = agent._toolguard_controlled_halt_response(decision)
         agent._emit_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
         append_message(messages, {"role": "assistant", "content": final_response})
