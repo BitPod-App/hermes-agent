@@ -1,0 +1,33 @@
+# Gitleaks — hard gate on code (PR), detection + rotate-alert on the data
+# path (post-merge push). CJ ruling 2026-09-20; doctrine in README/GOVERNANCE:
+# protection happens BEFORE publish. A PR scan can still prevent, so findings
+# FAIL the PR. A post-merge scan can only detect, so it alerts and never
+# rewrites history. Memory writes never ride PRs (the write door), so nothing
+# here can ever block one.
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        continue-on-error: ${{ github.event_name == 'push' }}
+        env:
+          GITLEAKS_ENABLE_SUMMARY: "true"
+
+      - name: post-publish finding note
+        if: github.event_name == 'push' && failure()
+        run: |
+          echo "::warning::gitleaks found candidate secrets in merged content — detection + rotate-alert, not protection (see the gitleaks summary)"
