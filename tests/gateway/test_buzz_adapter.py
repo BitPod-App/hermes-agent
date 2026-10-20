@@ -2010,8 +2010,11 @@ class TestDmClassification:
                           p=SELF_PUBKEY, reply_to="root-event"),
         )
         assert adapter._channel_state[CHANNEL]["chat_type"] == "group"
-        # It carried a mention, so it dispatches — but as a group message.
-        assert [d["chat_type"] for d in adapter._dispatched] == ["group"]
+        # It carried a mention, so it dispatches. It also carries a NIP-10 reply
+        # e-tag (reply_to="root-event"), so per BIT-1618 the dispatched chat_type
+        # is "thread" (not "group") — this keeps the root/reply session-key slot
+        # aligned; it does NOT reclassify the channel's own chat_type (above).
+        assert [d["chat_type"] for d in adapter._dispatched] == ["thread"]
 
         # And once the mention is absent, the channel gate drops the message
         # even though the earlier reply p-tagged us.
@@ -2141,6 +2144,45 @@ class TestThreadRoots:
         await adapter._handle_event(CHANNEL, adapter._channel_state[CHANNEL], event)
 
         assert dispatched[0].source.thread_id == "stable-root"
+
+    @pytest.mark.asyncio
+    async def test_thread_root_and_reply_build_the_same_session_key(self):
+        """BIT-1618: a thread's own opening message and every reply INTO that
+        thread must resolve to ONE session. Before the fix the root (no
+        thread_id yet — NIP-10 e-tags only exist on replies) got a
+        sender-isolated key while a reply (thread_id set) got a key shared
+        on the thread root: same conversation, two different sessions.
+        The fix stamps the root's own event id as ``prospective_thread_id``
+        (gated on reply_to_mode != "off") and gives in-thread replies
+        chat_type="thread" (not "group") so both turns' session keys
+        converge."""
+        from gateway.session import build_session_key
+
+        adapter = _make_adapter()
+        adapter._channel_state[CHANNEL] = {"chat_type": "group", "last_ts": 0, "seen": {}}
+        dispatched = []
+
+        async def capture(event):
+            dispatched.append(event)
+
+        adapter._message_handler = AsyncMock()
+        adapter.handle_message = capture
+        adapter._run_cli = _ScriptedCli()
+        adapter.send_reaction = AsyncMock(return_value=True)
+
+        root_event = _tagged_event("root-msg", CHANNEL, content="@Chip kick off a thread")
+        await adapter._handle_event(CHANNEL, adapter._channel_state[CHANNEL], root_event)
+
+        reply_event = _tagged_event(
+            "reply-msg", CHANNEL, content="@Chip following up", root="root-msg",
+        )
+        await adapter._handle_event(CHANNEL, adapter._channel_state[CHANNEL], reply_event)
+
+        assert len(dispatched) == 2
+        root_source, reply_source = dispatched[0].source, dispatched[1].source
+        assert root_source.prospective_thread_id == "root-msg"
+        assert reply_source.thread_id == "root-msg"
+        assert build_session_key(root_source) == build_session_key(reply_source)
 
 
 # ── Sending ───────────────────────────────────────────────────────────────

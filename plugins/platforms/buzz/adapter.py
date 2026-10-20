@@ -1484,9 +1484,21 @@ class BuzzAdapter(BasePlatformAdapter):
         # NIP-10 root scopes the session; remember it so our reply joins the SAME thread instead of nesting.
         thread_id = self._extract_thread_root(event)
         self._record_thread_root(event_id, event)
+        # A thread's own opening message has no e-tags yet (thread_id is None for it), so without help
+        # it would key a DIFFERENT session than every reply that later joins the thread (which DO carry
+        # thread_id). Stamp our own event id as the prospective root — mirrors Discord's
+        # prospective_thread_id continuity (build_session_key falls back to it when thread_id is unset)
+        # — but only when a reply can actually land in a thread; with replies off there is no thread for
+        # this root to join, so stamping it would just strand it on a key nobody else reaches.
+        prospective_thread_id = (
+            event_id if (not is_dm and thread_id is None and self._reply_to_mode != "off") else None
+        )
         # Attachment fetch spends credentials: only the gateway's explicit ``True`` permits it (else fail closed).
         # The message still dispatches so GatewayRunner can apply denial/pairing.
-        chat_type = "dm" if is_dm else "group"
+        # In-thread replies get chat_type="thread" (not "group") so their chat_type_slot in
+        # build_session_key matches the root's (which build_session_key normalizes to "thread" via
+        # prospective_thread_id) — see BIT-1618.
+        chat_type = "dm" if is_dm else ("thread" if thread_id else "group")
         fetch_allowed = bool(attachment_metadata) and self._is_sender_authorized(pubkey, chat_type, channel_id) is True
         attachments = await self._cache_inbound_attachments(attachment_metadata) if fetch_allowed else []
         if rejected_attachments:
@@ -1505,6 +1517,7 @@ class BuzzAdapter(BasePlatformAdapter):
             reply_to_text=reply_meta[1] if reply_meta else None, reply_to_author_id=reply_meta[0] if reply_meta else None,
             reply_to_is_own_message=reply_to_is_own, media_urls=[attachment.path for attachment in attachments],
             media_types=[attachment.media_type for attachment in attachments], message_type=message_type, raw_message=event,
+            prospective_thread_id=prospective_thread_id,
         )
 
     # ── DM classification: DMs leak in via ``channels list`` as "group"; a real channel's p-tag is only addressing ──
@@ -1725,6 +1738,7 @@ class BuzzAdapter(BasePlatformAdapter):
         reply_to_author_id: Optional[str] = None, reply_to_is_own_message: bool = False,
         media_urls: Optional[List[str]] = None, media_types: Optional[List[str]] = None,
         message_type: MessageType = MessageType.TEXT, raw_message: Any = None,
+        prospective_thread_id: Optional[str] = None,
     ) -> None:
         """Build a MessageEvent and hand it to the base class handler."""
         if not self._message_handler:
@@ -1746,6 +1760,7 @@ class BuzzAdapter(BasePlatformAdapter):
         source = self.build_source(
             chat_id=chat_id, chat_name=self._channel_names.get(chat_id, chat_id), chat_type=chat_type,
             user_id=user_id, user_name=user_name, thread_id=thread_id, message_id=message_id,
+            prospective_thread_id=prospective_thread_id,
         )
         event = MessageEvent(
             text=text, message_type=message_type, source=source, raw_message=raw_message, message_id=message_id,
