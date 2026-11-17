@@ -184,6 +184,7 @@ def _write_save(session_id, fmt, filename, render):
     """Write a ``/save`` export on this machine: ``filename`` as typed (relative to the cwd), else
     ``sessions/saved/hermes_conversation_<ts>.<fmt>`` under this CLI's home."""
     from cli import datetime
+    from hermes_cli.session_export import write_private_text
     saved_dir = get_hermes_home() / "sessions" / "saved"
     try:
         saved_dir.mkdir(parents=True, exist_ok=True)
@@ -200,8 +201,7 @@ def _write_save(session_id, fmt, filename, render):
 
     try:
         content = render()
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
+        write_private_text(path, content)
         label = {"json": "JSON", "md": t("cli.session.format_markdown"), "html": "HTML"}[fmt]
         print(t("cli.session.save_ok", path=path, label=label))
         if session_id:
@@ -696,8 +696,8 @@ class CLISessionMixin:
         """Handle ``/save [json|md|html] [filename] [redact]``.
 
         A convenience export only — every message is already persisted to the session DB, so
-        the live session stays resumable regardless. ``redact`` runs the force-mode secret
-        redaction pass before writing.
+        the live session stays resumable regardless. Every saved format runs the force-mode
+        secret redaction pass before writing; ``redact`` remains a compatibility suffix.
         """
         from hermes_cli.session_export import (
             SAVE_USAGE, load_save_snapshot, normalize_save_format, render_session_for_save)
@@ -705,7 +705,7 @@ class CLISessionMixin:
         parts = cmd.split()[1:]
         redact = bool(parts) and parts[-1].lower() in ("redact", "--redact")
         if redact:
-            parts = parts[:-1]
+            parts = parts[:-1]  # legacy compatibility; every save renders redacted
         if not parts:
             print(SAVE_USAGE)
             return
@@ -748,10 +748,6 @@ class CLISessionMixin:
             session_data = {
                 "id": self.session_id, "model": self.model,
                 "started_at": self.session_start.timestamp(), "messages": self.conversation_history}
-        if redact:
-            from hermes_cli.session_export_md import redact_session_data
-
-            session_data = redact_session_data(session_data)
         _write_save(self.session_id, fmt, filename, lambda: render_session_for_save(session_data, fmt))
 
     def _publish_truncated_history(self, truncated: list, *, invalidate_prompt: bool) -> None:

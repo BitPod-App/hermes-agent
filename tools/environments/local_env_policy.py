@@ -255,6 +255,9 @@ def _buzz_terminal_context_active() -> bool:
 def _is_terminal_first_party_env(name: str) -> bool:
     """``name`` is a first-party platform credential (``BUZZ_*``) AND the current
     process/session context entitles it to reach terminal children."""
+    # BIT-1838: with a key broker, shells get the account name and fetch the key per command.
+    if name.upper() == "BUZZ_PRIVATE_KEY" and os.environ.get("BUZZ_KEY_BROKER_ACCOUNT"):
+        return False
     return _matches_terminal_first_party_prefix(name) and _buzz_terminal_context_active()
 
 

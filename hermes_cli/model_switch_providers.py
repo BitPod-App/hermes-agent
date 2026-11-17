@@ -417,6 +417,9 @@ def _live_or_curated_ids(slug: str, curated: dict, *fallback_keys: str, merge_mo
         model_ids = _first_curated(curated, fallback_keys or (slug,))
         if merge_models_dev and slug in _MODELS_DEV_PREFERRED:
             model_ids = _merge_with_models_dev(slug, model_ids)
+    if str(slug or "").strip().lower() in {"xai", "xai-oauth"}:  # T01 pin (BIT-1411): models.dev re-adds Build SKUs
+        from hermes_cli.models_catalog_static import _drop_xai_build_skus
+        model_ids = _drop_xai_build_skus(list(model_ids))
     return without_generation_models(model_ids)
 
 
@@ -1344,6 +1347,17 @@ def _finalize_picker_rows(results: list, user_providers, current_model: str) -> 
                 row["models"] = [current_model, *models]
                 row["total_models"] = row.get("total_models", len(models)) + 1
             break
+
+    # T01 pin (BIT-1411/BIT-1413): last exit for every picker row — no xAI Build SKU is ever selectable,
+    # whichever source (live, disk cache, curated, models.dev) produced the row.
+    from hermes_cli.models_catalog_static import _drop_xai_build_skus, _is_xai_build_sku
+    for row in results:
+        if {str(row.get('slug', '')).strip().lower(), str(row.get('provider_id', '')).strip().lower()} & {"xai", "xai-oauth"}:
+            models = row.get("models") or []
+            kept = _drop_xai_build_skus(list(models))
+            if len(kept) != len(models):
+                row["models"] = kept
+                row["total_models"] = max(0, row.get("total_models", len(models)) - (len(models) - len(kept)))
 
     # Current provider first, then by model count descending
     results.sort(key=lambda r: (not r["is_current"], -r["total_models"]))

@@ -14,6 +14,7 @@ from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any
 
+from hermes_cli.session_export import open_private_text, write_private_text
 from hermes_cli.timefmt import coerce_epoch
 
 EXPORTER_VERSION = "hermes sessions export (md/qmd) v1"
@@ -174,16 +175,39 @@ def redact_session_data(session: dict[str, Any]) -> dict[str, Any]:
     """
     from agent.redact import redact_sensitive_text
 
-    def _clean(value: Any) -> Any:
+    def _clean(value: Any, key_path: str = "") -> Any:
         if isinstance(value, str):
-            return redact_sensitive_text(value, force=True)
+            # Tool results frequently contain JSON serialized inside a message
+            # string. Decode it so nested credential field names remain visible
+            # to the structured walk instead of becoming escaped text.
+            try:
+                parsed = json.loads(value)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                return json.dumps(_clean(parsed, key_path), ensure_ascii=False)
+
+            cleaned = redact_sensitive_text(value, force=True)
+            if cleaned != value:
+                return cleaned
+            if key_path:
+                # Opaque credentials have no vendor prefix. Preserve the field
+                # path while asking the canonical redactor whether this value is
+                # credential-bearing, then use a non-reusable export sentinel.
+                probe = f"{key_path}={value}"
+                if redact_sensitive_text(probe, force=True) != probe:
+                    return "[redacted]"
+            return value
         if isinstance(value, list):
-            return [_clean(v) for v in value]
+            return [_clean(v, key_path) for v in value]
         if isinstance(value, dict):
-            return {k: _clean(v) for k, v in value.items()}
+            return {
+                k: _clean(v, f"{key_path}.{k}" if key_path else str(k))
+                for k, v in value.items()
+            }
         return value
 
-    return {**session, **{k: _clean(session[k]) for k in ("messages", "segments") if session.get(k) is not None}}
+    return _clean(session)
 
 
 def _export_dir(output_dir: Path | str) -> Path:
@@ -199,7 +223,8 @@ def write_session_markdown(
     path = _export_dir(output_dir) / safe_session_filename(session, fmt=fmt)
     if path.exists() and not force:
         raise FileExistsError(str(path))
-    path.write_text(render_session_markdown(session, fmt=fmt), encoding="utf-8")
+    safe_session = redact_session_data(session)
+    write_private_text(path, render_session_markdown(safe_session, fmt=fmt))
     return path
 
 
@@ -214,6 +239,6 @@ def append_manifest_entry(output_dir: Path | str, session: dict[str, Any], path:
         "exported_at": time.time(),
     }
     manifest = _export_dir(output_dir) / "manifest.jsonl"
-    with manifest.open("a", encoding="utf-8") as fh:
+    with open_private_text(manifest, "a") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
     return manifest

@@ -41,6 +41,12 @@ def coding_verify_guidance(config: Optional[dict[str, Any]] = None) -> Optional[
     return CODING_VERIFY_GUIDANCE
 
 
+def stop_hook_without_edits(config: Optional[dict[str, Any]] = None) -> bool:
+    """``agent.stop_hook_without_edits``: also fire ``pre_verify`` on turns that edited nothing, so a
+    policy plugin can hold any text-ending turn (e.g. a gate agent that owes a verdict). Off by default."""
+    return is_truthy_value(_agent_cfg(config).get("stop_hook_without_edits", False), default=False)
+
+
 def _agent_cfg(config: Optional[dict[str, Any]]) -> dict[str, Any]:
     if config is None:
         try:

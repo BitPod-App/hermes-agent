@@ -402,7 +402,7 @@ What's the weather in Las Vegas?                    3d ago        tele   2025030
 
 Plus `--only user-prompts` for a prompts-only view (jsonl or md).
 
-All formats share the same selection knobs: `--session-id` for one session, or the full `prune`/`archive` filter set for bulk — `--older-than` / `--newer-than` / `--before` / `--after` (durations like `5h`/`2d`/`1w`, bare days, or ISO timestamps), `--source`, `--title`, `--model`, `--provider`, `--cwd`, `--min/--max-messages`, `--min/--max-tokens`, `--min/--max-cost`, `--min/--max-tool-calls`, `--user`, `--chat-id`, `--chat-type`, `--branch`, `--end-reason`. `--dry-run` previews the match set without writing. `--redact` scrubs secrets (API keys, tokens, credentials) from exported content on any format — recommended for anything you plan to share. Note: bulk filters match *ended* sessions; unfiltered `export` dumps everything, including active ones.
+All formats share the same selection knobs: `--session-id` for one session, or the full `prune`/`archive` filter set for bulk — `--older-than` / `--newer-than` / `--before` / `--after` (durations like `5h`/`2d`/`1w`, bare days, or ISO timestamps), `--source`, `--title`, `--model`, `--provider`, `--cwd`, `--min/--max-messages`, `--min/--max-tokens`, `--min/--max-cost`, `--min/--max-tool-calls`, `--user`, `--chat-id`, `--chat-type`, `--branch`, `--end-reason`. `--dry-run` previews the match set without writing. All export formats scrub secrets (API keys, tokens, credentials) by default and create local files with mode `0600`, including overwrites. The legacy `--redact` flag remains accepted for compatibility. Note: bulk filters match *ended* sessions; unfiltered `export` dumps everything, including active ones.
 
 #### JSONL (default)
 
@@ -420,8 +420,8 @@ hermes sessions export session.jsonl --session-id 20250305_091523_a1b2c3d4
 # ~/exports/hermes_session_20250305_091523_a1b2c3d4.jsonl
 hermes sessions export ~/exports/ --session-id 20250305_091523_a1b2c3d4
 
-# Redact API keys/tokens/credentials from the exported content
-hermes sessions export backup.jsonl --redact
+# API keys/tokens/credentials are redacted by default
+hermes sessions export backup.jsonl
 ```
 
 Exported files contain one JSON object per line with full session metadata and every stored message, each with its `active`/`compacted` flags. That includes turns archived by in-place compaction and messages removed by rewind or edit. Importing the file (the dashboard's session import) restores those rows as archived history, not as live model context. A `/save json` snapshot (CLI, messaging, TUI, or Desktop) holds the same rows. Treat a backup as holding everything the session ever contained. To share a conversation, export a display format (`--format md` or `html`, which holds only the history the session shows) with `--redact`. Each session's backup is built in memory, so a session with more stored rows than `sessions.max_export_messages` is refused (see [Oversized-Transcript Guards](#oversized-transcript-guards)).
@@ -438,8 +438,8 @@ Each record also carries a `timings` block derived from the message timestamps, 
 # One session as a standalone HTML page
 hermes sessions export --format html --session-id 20250305_091523_a1b2c3d4 transcript.html
 
-# All Telegram sessions from the last week in one file, secrets redacted
-hermes sessions export --format html --newer-than 1w --source telegram --redact archive.html
+# All Telegram sessions from the last week in one file (secret-redacted by default)
+hermes sessions export --format html --newer-than 1w --source telegram archive.html
 ```
 
 #### Prompts Only
@@ -454,7 +454,7 @@ hermes sessions export prompts.jsonl --session-id 20250305_091523_a1b2c3d4 --onl
 hermes sessions export - --session-id 20250305_091523_a1b2c3d4 --only user-prompts --format md
 ```
 
-Works with `--format jsonl` (default) or `md`, honors the same filters for bulk export, and combines with `--redact`.
+Works with `--format jsonl` (default) or `md`, honors the same filters for bulk export, and is secret-redacted by default.
 
 #### Traces (HF Agent Trace Viewer)
 
@@ -490,14 +490,14 @@ hermes sessions export --format md --older-than 90 --dry-run
 # Export ended Telegram sessions older than 2 weeks to QMD files
 hermes sessions export --format qmd --older-than 2w --source telegram
 
-# Export long Claude sessions, secrets redacted
-hermes sessions export --format md --model sonnet --min-messages 50 --redact
+# Export long Claude sessions (secret-redacted by default)
+hermes sessions export --format md --model sonnet --min-messages 50
 
 # Only after verification, export and delete one explicitly named session
 hermes sessions export --format md --session-id 20250305_091523_a1b2c3d4 --delete-after-verified --yes
 ```
 
-Markdown/QMD export writes one `.md` or `.qmd` file per exported session plus a `manifest.jsonl` with the file path, message count, lineage ids, and SHA-256. Bulk export requires at least one filter; a bare bulk export is refused. `--delete-after-verified` is intentionally limited to `--session-id` and requires `--yes`. Because deleting a parent session also removes its delegate/subagent sessions, this mode exports and verifies each delegate in a separate file before deleting anything. Markdown/QMD files hold the full history shown by the session, including turns archived by in-place compaction. Deletion compares that exact display transcript and the delegate set again inside the same database transaction that performs the delete; any intervening append, rewrite, rewind, compaction, or delegate change refuses deletion. The same display-history rule applies to `--format html`, `--only user-prompts` (with either Markdown or JSONL output), and `/save md|html`. Full-session JSON/JSONL exports (`hermes sessions export` without `--only`) and `/save json` (CLI, messaging, TUI, Desktop) are backups of every stored row, archived rows included (see [Export Sessions](#export-sessions)). `--redact` scrubs secrets (API keys, tokens, credentials) from message content and tool output before writing — recommended for any export you plan to share.
+Markdown/QMD export writes one `.md` or `.qmd` file per exported session plus a `manifest.jsonl` with the file path, message count, lineage ids, and SHA-256. Bulk export requires at least one filter; a bare bulk export is refused. `--delete-after-verified` is intentionally limited to `--session-id` and requires `--yes`. Because deleting a parent session also removes its delegate/subagent sessions, this mode exports and verifies each delegate in a separate file before deleting anything. Markdown/QMD files hold the full history shown by the session, including turns archived by in-place compaction. Deletion compares that exact display transcript and the delegate set again inside the same database transaction that performs the delete; any intervening append, rewrite, rewind, compaction, or delegate change refuses deletion. The same display-history rule applies to `--format html`, `--only user-prompts` (with either Markdown or JSONL output), and `/save md|html`. Full-session JSON/JSONL exports (`hermes sessions export` without `--only`) and `/save json` (CLI, messaging, TUI, Desktop) are backups of every stored row, archived rows included (see [Export Sessions](#export-sessions)). Message content and tool output are always secret-redacted (API keys, tokens, credentials) before writing, and export files are created with 0600 permissions; `--redact` is still accepted for compatibility.
 
 ### Delete a Session
 

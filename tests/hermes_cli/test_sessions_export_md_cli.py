@@ -65,8 +65,8 @@ def test_sessions_export_verified_delete_keeps_file(monkeypatch, tmp_path, capsy
     assert "Deleted exported session" in capsys.readouterr().out
 
 
-def test_sessions_export_redact_scrubs_secrets(monkeypatch, tmp_path):
-    """Redaction affects the exported file, never the stored transcript."""
+def test_sessions_export_scrubs_secrets_by_default(monkeypatch, tmp_path):
+    """Every exported artifact runs through force-mode secret redaction."""
     import hermes_cli.main as main_mod
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -79,7 +79,7 @@ def test_sessions_export_redact_scrubs_secrets(monkeypatch, tmp_path):
     before = path.read_bytes()
     monkeypatch.setattr(sys, "argv", [
         "hermes", "sessions", "export", "--format", "md",
-        "--session-id", "s1", "--redact", str(tmp_path / "exports"),
+        "--session-id", "s1", str(tmp_path / "exports"),
     ])
 
     main_mod.main()
@@ -90,3 +90,41 @@ def test_sessions_export_redact_scrubs_secrets(monkeypatch, tmp_path):
     assert secret not in text
     assert "api key:" in text
     assert path.read_bytes() == before
+
+
+def test_sessions_export_jsonl_scrubs_secrets_by_default(monkeypatch, tmp_path):
+    import hermes_cli.main as main_mod
+    import hermes_state
+
+    opaque = "E" * 64
+
+    class FakeDB:
+        def resolve_session_id(self, session_id):
+            return "s1"
+
+        def assert_exports_safe(self, session_ids, max_messages=None):
+            pass
+
+        def export_session(self, session_id, **kwargs):
+            return {
+                "id": "s1",
+                "messages": [
+                    {"role": "tool", "content": f"HERMES_DASHBOARD_SESSION_TOKEN={opaque}"}
+                ],
+            }
+
+        def close(self):
+            pass
+
+    output = tmp_path / "session.jsonl"
+    monkeypatch.setattr(hermes_state, "SessionDB", lambda *args, **kwargs: FakeDB())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["hermes", "sessions", "export", "--session-id", "s1", str(output)],
+    )
+
+    main_mod.main()
+
+    assert opaque not in output.read_text(encoding="utf-8")
+    assert output.stat().st_mode & 0o777 == 0o600

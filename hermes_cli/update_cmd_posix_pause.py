@@ -170,8 +170,25 @@ def _discover_launchd() -> list[dict]:
             continue
         plist = get_launchd_plist_path().with_name(f"{label}.plist")
         jobs.append({"kind": "launchd", "label": label, "domain": domain, "plist": str(plist), "pid": int(pid),
-                     "home": _home_of(int(pid))})
+                     "home": _plist_home(plist) or _home_of(int(pid))})
     return jobs
+
+
+def _plist_home(plist: Path) -> str | None:
+    """T01 BIT-1901: the ``HERMES_HOME`` the job's own plist launches with, or ``None``.
+
+    The job's PID is the launcher's (the stock ``osascript`` wrapper), not the gateway's, and its
+    home falls back to the sticky ``active_profile``. On 2026-11-08 that mapped vera and ashina to
+    taylor01's control socket: taylor01 drained three times and the other two were never asked.
+    The plist is the launch identity launchd itself uses, so it names the right home."""
+    try:
+        import plistlib
+        with open(plist, "rb") as fh:
+            env = (plistlib.load(fh) or {}).get("EnvironmentVariables") or {}
+    except Exception:  # health: allow BLE001 -- unreadable plist: fall back to the PID's home
+        return None
+    home = str(env.get("HERMES_HOME") or "").strip()
+    return home if home and Path(home).is_dir() else None
 
 
 def _home_of(pid: int) -> str | None:
@@ -428,14 +445,56 @@ def _ask_to_drain(entry: dict) -> bool:
     signal-stop path, and could fire before the request lands. The caller records the request
     (``mark_stop_sent``) BEFORE sending it, so a request that reaches the gateway after this update
     died still leaves the evidence that keeps the drained gateway's restart debt."""
+    ack = _drain_ack(entry)
+    return bool(ack and not ack.get("not_draining") and (ack.get("pausing") or ack.get("already_stopping")))
+
+
+def _drain_ack(entry: dict) -> dict | None:
+    """The gateway's raw ``pause-for-update`` answer (None: no gateway answered). Kept on *entry*."""
     from gateway.control_socket import pause_gateway_for_update
     if not entry.get("home"):
-        return False
+        return None
     try:
         ack = pause_gateway_for_update(Path(entry["home"]))
     except Exception:  # health: allow BLE001 -- no answer is the pre-verb gateway: the fallback stop handles it
-        return False
-    return bool(ack and (ack.get("pausing") or ack.get("already_stopping")))
+        ack = None
+    entry["ack"] = ack if isinstance(ack, dict) else None
+    return entry["ack"]
+
+
+def _holds_work(entry: dict) -> bool:
+    """T01 BIT-1901: does this gateway hold in-flight work the drain must protect?
+
+    Evidence, freshest first: the ACK's own ``awaitable_work`` count (computed on the gateway's loop;
+    it already excludes wedged turns), then the published ``active_agents`` count in
+    ``gateway_state.json``. The ``active_work`` list is NOT evidence: it is a drain-time snapshot the
+    gateway refreshes every 30 s, and it outlives a turn that has ended. Unknown counts as busy --
+    never cut a turn on a guess.
+    """
+    ack = entry.get("ack") or {}
+    if isinstance(ack.get("awaitable_work"), int):
+        return ack["awaitable_work"] > 0
+    if not entry.get("home"):
+        return True
+    try:
+        from gateway.status import parse_active_agents, read_runtime_status
+        record = read_runtime_status(Path(entry["home"]) / "gateway_state.json")
+    except Exception:  # health: allow BLE001 -- unreadable state is unknown, i.e. busy
+        return True
+    if not isinstance(record, dict) or "active_agents" not in record:
+        return True  # no published count: unknown, i.e. busy
+    return parse_active_agents(record.get("active_agents")) > 0
+
+
+def _refresh_evidence(entry: dict, now: float) -> None:
+    """Re-ask a waiting gateway at most once a second: a draining gateway answers
+    ``already_stopping`` with a fresh ``awaitable_work``; one that has not drained yet is asked to
+    (a ``not_draining`` gateway still accepts new turns). No answer clears the ACK, so the published
+    ``active_agents`` count decides."""
+    if now - entry.get("asked_at", 0.0) < 1.0:
+        return
+    entry["asked_at"] = now
+    _drain_ack(entry)
 
 
 def _stop_at_once(entry: dict) -> None:
@@ -468,9 +527,12 @@ def _stop_gateways(token: dict, entries: list[dict]) -> None:
     budget, waiting = _drain_budget(), []
     for entry in entries:
         pause_record.mark_stop_sent(token, entry["pid"])  # before the request: see _ask_to_drain
-        if _ask_to_drain(entry):
-            waiting.append(entry)
+        _ask_to_drain(entry)  # records the raw answer on entry["ack"]
+        if entry.get("ack") is not None and _holds_work(entry):
+            waiting.append(entry)  # real in-flight work: wait for it (stopped below once it clears)
         else:
+            # T01 BIT-1901: no answer, or nothing in flight -> nothing to protect; stop now through
+            # the supervisor instead of waiting out a budget for an exit that may never come.
             _stop_at_once(entry)
             if not entry.get("kind"):
                 waiting.append(entry)  # a SIGTERMed bare gateway is waited for like a drained one
@@ -483,6 +545,17 @@ def _stop_gateways(token: dict, entries: list[dict]) -> None:
         for entry in [e for e in waiting if not _alive(e["pid"], e.get("ct"))]:
             waiting.remove(entry)
             _disarm(entry)
+        # T01 BIT-1901: fresh evidence each second -- the gateway's own live count, else its
+        # published active_agents (2026-11-08: Vera took a new QA turn mid-"drain"; re-asking also
+        # makes a not_draining gateway actually drain).
+        now = time.monotonic()
+        for entry in waiting:
+            _refresh_evidence(entry, now)
+        # T01 BIT-1901: the moment a supervised gateway's held work is gone, stop it -- the budget
+        # is only the outer net for work that never finishes, not the normal path.
+        for entry in [e for e in waiting if e.get("kind") and not _holds_work(e)]:
+            waiting.remove(entry)
+            _stop_at_once(entry)
         for tick in ticks if waiting else ():
             tick()
         time.sleep(0.2)

@@ -4,6 +4,7 @@ import pytest
 
 from hermes_cli.session_export_md import (
     append_manifest_entry,
+    redact_session_data,
     render_session_markdown,
     safe_session_filename,
     verify_export_file,
@@ -75,3 +76,42 @@ def test_verify_export_file_checks_count_and_sha(tmp_path):
     assert "sha256" in reason
 
 
+
+
+def test_redact_session_data_uses_structured_key_context_for_opaque_values():
+    opaque = "A" * 31 + "_" + "B" * 32
+    nested = {"output": {"HERMES_DASHBOARD_SESSION_TOKEN": opaque}}
+    session = _session(messages=[{"role": "tool", "content": __import__("json").dumps(nested)}])
+
+    redacted = redact_session_data(session)
+    serialized = __import__("json").dumps(redacted)
+
+    assert opaque not in serialized
+    assert "[redacted]" in serialized
+
+
+def test_write_session_markdown_redacts_by_default(tmp_path):
+    opaque = "C" * 64
+    session = _session(messages=[{"role": "tool", "content": f"HERMES_DASHBOARD_SESSION_TOKEN={opaque}"}])
+
+    path = write_session_markdown(session, tmp_path)
+
+    assert opaque not in path.read_text(encoding="utf-8")
+    assert path.stat().st_mode & 0o777 == 0o600
+
+    path.chmod(0o644)
+    replaced = write_session_markdown(session, tmp_path, force=True)
+    assert replaced.stat().st_mode & 0o777 == 0o600
+
+
+def test_manifest_is_private_for_new_and_existing_file(tmp_path):
+    session = _session()
+    export = tmp_path / "export.md"
+    export.write_text("safe", encoding="utf-8")
+
+    manifest = append_manifest_entry(tmp_path, session, export, fmt="md")
+    assert manifest.stat().st_mode & 0o777 == 0o600
+
+    manifest.chmod(0o644)
+    append_manifest_entry(tmp_path, session, export, fmt="md")
+    assert manifest.stat().st_mode & 0o777 == 0o600

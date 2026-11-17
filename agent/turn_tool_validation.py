@@ -22,6 +22,10 @@ from hermes_constants import FINISH_REASON_LENGTH
 
 logger = logging.getLogger("agent.conversation_loop")
 
+# Keep two silent retries plus two explicit recovery turns, then fail the turn.
+# Resetting after every recovery made repeated malformed responses unbounded (BIT-1334).
+_MAX_INVALID_JSON_RESPONSES = 5
+
 
 @dataclass
 class ToolValidationVerdict:
@@ -53,20 +57,28 @@ def _append_tool_error_results(messages, tool_calls, content_for) -> None:
         })
 
 
-def _partial_exit(agent, messages, conversation_history, api_call_count, final_response: str) -> dict[str, Any]:
+def _partial_exit(
+    agent, messages, conversation_history, api_call_count, final_response: str, *,
+    failure_reason: str = "truncated", turn_exit_reason: str | None = None,
+) -> dict[str, Any]:
     """Terminal partial result. Prior retries or an earlier tool batch leave a tool-result
     tail; close it as interrupt aborts do so the next turn is not tool→user (#48879).
     This path never reaches finalize_turn, so persist here."""
     close_interrupted_tool_sequence(messages, final_response)
     agent._persist_session(messages, conversation_history)
-    return stamp_failure({
+    result = {
         "final_response": final_response,
         "messages": messages,
         "api_calls": api_call_count,
         "completed": False,
+        "failed": True,
         "partial": True,
         "error": final_response,
-    }, "truncated", True)
+        "session_id": agent.session_id,
+    }
+    if turn_exit_reason:
+        result["turn_exit_reason"] = turn_exit_reason
+    return stamp_failure(result, failure_reason, True)
 
 
 def validate_tool_calls(
@@ -206,6 +218,24 @@ def validate_tool_calls(
         tool_name, error_msg = invalid_json_args[0]
         agent._buffer_vprint(f"⚠️  Invalid JSON in tool call arguments for '{tool_name}': {error_msg}")
 
+        if agent._invalid_json_retries >= _MAX_INVALID_JSON_RESPONSES:
+            agent._flush_status_buffer()
+            agent._vprint(
+                f"{agent.log_prefix}❌ Invalid tool-call JSON repeated "
+                f"{_MAX_INVALID_JSON_RESPONSES} times. Stopping as failed.",
+                force=True,
+                diagnostic=True,
+            )
+            agent._invalid_json_retries = 0
+            agent._cleanup_task_resources(effective_task_id)
+            return _verdict("return", _partial_exit(
+                agent, messages, conversation_history, api_call_count,
+                "Model repeatedly generated invalid JSON tool-call arguments; "
+                "the turn was stopped before another retry.",
+                failure_reason="invalid_tool_json",
+                turn_exit_reason="invalid_tool_json_exhausted",
+            ))
+
         if agent._invalid_json_retries < 3:
             agent._buffer_vprint(f"🔄 Retrying API call ({agent._invalid_json_retries}/3)...")
             # Don't add anything to messages, just retry the API call
@@ -213,7 +243,6 @@ def validate_tool_calls(
         # Instead of returning partial, inject tool error results so the model can recover.
         # Using tool results (not user messages) preserves role alternation.
         agent._buffer_vprint("⚠️  Injecting recovery tool results for invalid JSON...")
-        agent._invalid_json_retries = 0  # Reset for next attempt
         # Append the assistant message with its (broken) tool_calls, then one
         # error result per call.
         append_message(messages, agent._build_assistant_message(assistant_message, finish_reason))

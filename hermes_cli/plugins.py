@@ -1239,6 +1239,7 @@ def _dispatch_pre_tool_call_hooks(
 def get_pre_verify_continue_message(
     *, session_id: str = "", platform: str = "", model: str = "", coding: bool = False,
     attempt: int = 0, final_response: str = "", changed_paths: Optional[list[str]] = None,
+    turn_messages: Optional[list[Any]] = None,
 ) -> Optional[str]:
     """Check ``pre_verify`` hooks for ``{"action": "continue", "message"}`` (or Claude-Code Stop
     ``{"decision": "block", "reason"}``) to keep the turn going; first non-empty message wins, any
@@ -1246,6 +1247,7 @@ def get_pre_verify_continue_message(
     hook_results = invoke_hook(
         "pre_verify", session_id=session_id, platform=platform, model=model, coding=coding,
         attempt=attempt, final_response=final_response, changed_paths=list(changed_paths or []),
+        turn_messages=list(turn_messages or []),
     )
     for result in hook_results:
         if not isinstance(result, dict):

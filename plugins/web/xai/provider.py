@@ -1,7 +1,7 @@
 """xAI Web Search — search-only provider backed by Grok's server-side ``web_search`` tool on the
 Responses API (https://docs.x.ai/developers/tools/web-search); Grok is asked for structured JSON
 so rows match every other Hermes web provider. Config: ``web.backend: "xai"``; optional ``web.xai``:
-``model`` (default grok-build-0.1), ``allowed_domains`` / ``excluded_domains`` (max 5, mutually
+``model`` (default grok-4.6), ``allowed_domains`` / ``excluded_domains`` (max 5, mutually
 exclusive), ``timeout`` (default 90s). Auth: Grok OAuth via ``hermes auth``, else XAI_API_KEY.
 """
 
@@ -17,7 +17,7 @@ from tools.xai_http import has_xai_credentials, hermes_xai_user_agent, resolve_x
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "grok-build-0.1"
+DEFAULT_MODEL = "grok-4.6"
 DEFAULT_TIMEOUT = 90
 _MAX_DOMAIN_FILTERS = 5  # xAI hard cap on allowed_domains / excluded_domains
 

@@ -10,6 +10,9 @@ from __future__ import annotations
 from datetime import datetime, timezone, UTC
 from html import escape as html_escape
 import json
+import os
+from pathlib import Path
+import tempfile
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Tuple
 
 from hermes_cli.timefmt import coerce_epoch
@@ -17,6 +20,44 @@ from hermes_cli.timefmt import coerce_epoch
 
 ExportFormat = Literal["jsonl", "markdown"]
 ExportOnly = Literal["user-prompts"]
+
+
+def open_private_text(path: Path | str, mode: str = "w"):
+    """Open a text file with mode 0600, including pre-existing paths."""
+    if mode not in {"w", "a"}:
+        raise ValueError("private text files support only write or append mode")
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if mode == "w" else os.O_APPEND)
+    fd = os.open(os.fspath(path), flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, mode, encoding="utf-8")
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def write_private_text(path: Path | str, text: str) -> None:
+    """Atomically create or replace a UTF-8 text file with mode 0600."""
+    target = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
 
 _EXPORT_FORMATS = {"jsonl": "jsonl", "markdown": "markdown", "md": "markdown"}
 _ONLY_ALIASES = {"user", "prompts", "user-prompts", "user_prompts"}
@@ -251,7 +292,9 @@ Formats:
 Options:
   filename   optional output name/path (default: auto-named;
              CLI saves under ~/.hermes/sessions/saved/)
-  redact     scrub API keys, tokens, and credentials before writing
+
+All saved formats scrub API keys, tokens, and credentials before writing.
+The legacy ``redact`` suffix is accepted for compatibility.
 
 Examples:
   /save json
@@ -288,7 +331,9 @@ def render_session_for_save(session: dict[str, Any], fmt: str) -> str:
     renderer = _SAVE_RENDERERS.get(fmt)
     if renderer is None:
         raise ValueError(f"Unknown save format: {fmt!r}")
-    return renderer(session)
+    from hermes_cli.session_export_md import redact_session_data
+
+    return renderer(redact_session_data(session))
 
 
 def default_save_filename(session_id: str, fmt: str) -> str:

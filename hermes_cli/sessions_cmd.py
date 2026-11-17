@@ -116,8 +116,9 @@ def _write_output(output, text, summary) -> None:
     if not output or output == "-":
         sys.stdout.write(text)
         return
-    with open(output, "w", encoding="utf-8") as f:
-        f.write(text)
+    from hermes_cli.session_export import write_private_text
+
+    write_private_text(output, text)
     print(summary)
 
 
@@ -385,8 +386,8 @@ def _cmd_export(db, args):
         return _not_found(args.session_id)
 
     def _redact(data):
-        if not args.redact or data is None:
-            return data
+        if data is None:
+            return None
         from hermes_cli.session_export_md import redact_session_data
         return redact_session_data(data)
 
@@ -546,7 +547,9 @@ def _export_trace(db, args, filters):
             for sid in ids:
                 jsonl = _render_trace(sid)
                 if jsonl:
-                    (out_dir / f"{sid}.trace.jsonl").write_text(jsonl, encoding="utf-8")
+                    from hermes_cli.session_export import write_private_text
+
+                    write_private_text(out_dir / f"{sid}.trace.jsonl", jsonl)
                     exported += 1
             print(f"Exported {exported} session trace(s) to {out_dir}")
     except TraceRedactionError:

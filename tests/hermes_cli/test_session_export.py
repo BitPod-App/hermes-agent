@@ -1,7 +1,11 @@
 import json
 import sys
 
-from hermes_cli.session_export import export_record_count, render_sessions_export
+from hermes_cli.session_export import (
+    export_record_count,
+    render_session_for_save,
+    render_sessions_export,
+)
 from hermes_cli.session_export_html import (
     _generate_messages_html,
     generate_multi_session_html_export,
@@ -124,3 +128,12 @@ def test_sessions_export_cli_prompt_only_stdout(monkeypatch, capsys, tmp_path):
     assert path.read_bytes() == before
 
 
+def test_render_session_for_save_redacts_by_default():
+    opaque = "D" * 64
+    session = {
+        "id": "safe-default",
+        "messages": [{"role": "tool", "content": f"HERMES_DASHBOARD_SESSION_TOKEN={opaque}"}],
+    }
+
+    for fmt in ("json", "md", "html"):
+        assert opaque not in render_session_for_save(session, fmt)

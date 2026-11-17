@@ -322,19 +322,29 @@ async def _start_gateway_start_control_socket(runner):
             except Exception:
                 _drain = 30.0
             accepted_box: list[bool] = []
+            work_box: list[int] = []
             _done = threading.Event()
 
             def _request() -> None:
                 try:
                     accepted_box.append(runner.request_restart(detached=False, via_service=True))
+                    try:
+                        work_box.append(int(runner._awaitable_work_count()))
+                    except Exception:  # health: allow BLE001 -- unknown work is reported as None (busy)
+                        pass
                 finally:
                     _done.set()
 
             _main_loop.call_soon_threadsafe(_request)
             _done.wait(timeout=5.0)
-            accepted = bool(accepted_box and accepted_box[0])
+            # T01 BIT-1901: a request that never ran on the loop is NOT "already stopping" -- that
+            # false ACK held the 2026-11-08 update for its whole budget on two idle gateways.
+            ran = bool(accepted_box)
+            accepted = bool(ran and accepted_box[0])
+            stopping = bool(ran and not accepted and getattr(runner, "_restart_task_started", False))
             return {
-                "pausing": accepted, "already_stopping": not accepted,
+                "pausing": accepted, "already_stopping": stopping, "not_draining": not (accepted or stopping),
+                "awaitable_work": work_box[0] if work_box else None,
                 "pid": os.getpid(), "drain_timeout": _drain}
 
         def _rescan_profiles_handler() -> dict:

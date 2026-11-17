@@ -97,7 +97,7 @@ def _codex_curated_models() -> list[str]:
 # next refresh. Models xAI retired on 2026-05-15 (grok-4*, grok-4-fast*, grok-4-1-fast*,
 # grok-code-fast-1) are excluded — see docs.x.ai/developers/migration/may-15-retirement.
 _XAI_STATIC_FALLBACK: list[str] = [
-    "grok-4.6", "grok-build-0.1", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning",
+    "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning",
     "grok-4.20-0309-non-reasoning", "grok-4.20-multi-agent-0309",
 ]
 
@@ -106,6 +106,17 @@ _XAI_STATIC_FALLBACK: list[str] = [
 _XAI_CURATED_EXTRAS: list[str] = ["grok-4.6", "grok-4.5", "grok-composer-2.5-fast"]
 
 _XAI_TOP_MODEL = "grok-4.6"
+
+
+def _is_xai_build_sku(model_id: str) -> bool:
+    """True for Grok Build / code-fast ids. SuperGrok OAuth bills these as Grok Build."""
+    name = str(model_id or "").strip().lower().rsplit("/", 1)[-1]
+    return name.startswith("grok-build") or name.startswith("grok-code-fast")
+
+
+def _drop_xai_build_skus(ids: list[str]) -> list[str]:
+    """Keep Build SKUs off xAI / xAI-OAuth pickers even when /v1/models lists them."""
+    return [mid for mid in ids if not _is_xai_build_sku(mid)]
 
 
 def _xai_promote_top(ids: list[str]) -> list[str]:
@@ -125,7 +136,7 @@ def _xai_merge_curated_extras(ids: list[str]) -> list[str]:
 
 
 def _xai_finalize_catalog(ids: list[str]) -> list[str]:
-    return _xai_promote_top(_xai_merge_curated_extras(ids))
+    return _xai_promote_top(_xai_merge_curated_extras(_drop_xai_build_skus(ids)))
 
 
 def _xai_curated_models() -> list[str]:

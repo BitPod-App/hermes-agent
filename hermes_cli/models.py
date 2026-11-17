@@ -1750,19 +1750,19 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
     if relay and normalized not in _RELAY_AWARE_CATALOG_FETCHERS:
         relayed = _relay_model_catalog(normalized, relay)
         if relayed:
-            return _chat_catalog_rows(relayed)
+            return _chat_catalog_rows(_xai_finalize_catalog(list(relayed)) if normalized in {"xai", "xai-oauth"} else relayed)
         return _static_catalog(normalized, _catalog_fetcher(normalized))
     fetcher = _catalog_fetcher(normalized)
     if fetcher is not None:
         models = fetcher(normalized, force_refresh)
         if models is not None:
-            return _chat_catalog_rows(models)
+            return _chat_catalog_rows(_xai_finalize_catalog(list(models)) if normalized in {"xai", "xai-oauth"} else models)
     try:
         models = _profile_live_catalog(normalized)
     except Exception:
         models = None
     if models is not None:
-        return _chat_catalog_rows(models)
+        return _chat_catalog_rows(_xai_finalize_catalog(list(models)) if normalized in {"xai", "xai-oauth"} else models)
 
     return _static_catalog(normalized, fetcher)
 
@@ -2001,6 +2001,18 @@ def _model_requires_account_discovery(provider: Optional[str], model: str) -> bo
 
 
 def cached_provider_model_ids(
+    provider: Optional[str], *, force_refresh: bool = False,
+    ttl_seconds: int = _PROVIDER_MODELS_CACHE_TTL, non_blocking: bool = False) -> list[str]:
+    """T01 pin (BIT-1411/BIT-1413): every cached/live/stale row for xAI drops Build SKUs."""
+    ids = _cached_provider_model_ids_unguarded(
+        provider, force_refresh=force_refresh, ttl_seconds=ttl_seconds, non_blocking=non_blocking)
+    if str(provider or "").strip().lower() in {"xai", "xai-oauth"} or normalize_provider(provider) in {"xai", "xai-oauth"}:
+        from hermes_cli.models_catalog_static import _drop_xai_build_skus
+        return _chat_catalog_rows(_drop_xai_build_skus(list(ids)))
+    return ids
+
+
+def _cached_provider_model_ids_unguarded(
     provider: Optional[str], *, force_refresh: bool = False,
     ttl_seconds: int = _PROVIDER_MODELS_CACHE_TTL, non_blocking: bool = False) -> list[str]:
     """Disk-cached :func:`provider_model_ids`: fresh cache hit, else live fetch persisting a non-empty

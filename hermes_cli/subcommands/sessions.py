@@ -123,7 +123,7 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
         "bare number of days, or an ISO timestamp). Filtered exports include pinned and archived "
         "sessions, so they back up everything a matching prune could delete")
     _flag(sessions_export, "--redact",
-        help="Redact secrets (API keys, tokens, credentials) from exported content")
+        help="Accepted for compatibility; exports are always secret-redacted")
     sessions_export.add_argument("--lineage", choices=["single", "logical"], default="single",
         help="md/qmd only: export one row or its compression lineage")
     _flag(sessions_export, "--delete-after-verified",

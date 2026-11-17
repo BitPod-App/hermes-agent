@@ -9,6 +9,7 @@ from hermes_cli.session_export import (
     default_save_filename,
     normalize_save_format,
     render_session_for_save,
+    write_private_text,
 )
 
 SESSION = {
@@ -66,3 +67,14 @@ class TestDefaultSaveFilename:
         name = default_save_filename("../../etc/passwd", "json")
         assert "/" not in name
         assert ".." not in name.replace("etcpasswd", "")
+
+
+def test_private_writer_is_0600_for_new_and_replaced_paths(tmp_path):
+    path = tmp_path / "saved.json"
+    write_private_text(path, "first")
+    assert path.stat().st_mode & 0o777 == 0o600
+
+    path.chmod(0o644)
+    write_private_text(path, "second")
+    assert path.read_text(encoding="utf-8") == "second"
+    assert path.stat().st_mode & 0o777 == 0o600

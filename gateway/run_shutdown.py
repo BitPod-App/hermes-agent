@@ -1519,14 +1519,31 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
         """
         return self._restart_wait_cron_counts()["restart_safe"]
 
+    # A held turn whose session row already ended is finished work the gateway never released
+    # (BitPod BIT-1768: six webhook PM turns ended ``webhook_complete`` yet held a drain for ~5 days).
+    # The short idle floor keeps a turn that just rotated sessions (compression) out of it.
+    _ENDED_SESSION_IDLE_FLOOR_S = 300.0
+
     def _wedged_chat_agent_count(self) -> int:
-        """Running chat agents with no activity for ``agent.gateway_timeout`` (0 when disabled);
-        an unreadable activity summary means "not wedged".
+        """Running chat agents with no activity for ``agent.gateway_timeout`` (0 when disabled),
+        plus agents whose session row has already ended and that show no activity for
+        ``_ENDED_SESSION_IDLE_FLOOR_S`` (an unreadable activity clock counts as idle there only).
+        Otherwise an unreadable activity summary means "not wedged".
         """
-        from gateway.run import _AGENT_PENDING_SENTINEL, _float_env
+        from gateway.run import _AGENT_PENDING_SENTINEL, _float_env, _gateway_session_db_inner
         timeout = _float_env("HERMES_AGENT_TIMEOUT", 1800)
-        if timeout <= 0:
-            return 0
+        session_db = _gateway_session_db_inner(self)
+
+        def _session_ended(agent: Any) -> bool:
+            read = getattr(session_db, "get_session_list_row", None)
+            session_id = getattr(agent, "session_id", None)
+            if not isinstance(session_id, str) or not session_id or not callable(read):
+                return False
+            try:
+                row = read(session_id)
+            except Exception:
+                return False
+            return isinstance(row, dict) and bool(row.get("ended_at"))
 
         def _idle_seconds(agent: Any) -> Optional[float]:
             summary_fn = getattr(agent, "get_activity_summary", None)
@@ -1538,11 +1555,16 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
             except Exception:
                 return None
 
+        def _wedged(agent: Any) -> bool:
+            idle = _idle_seconds(agent)
+            if timeout > 0 and idle is not None and idle >= timeout:
+                return True
+            return (idle is None or idle >= self._ENDED_SESSION_IDLE_FLOOR_S) and _session_ended(agent)
+
         return sum(
             1
             for agent in list((getattr(self, "_running_agents", None) or {}).values())
-            if agent is not None and agent is not _AGENT_PENDING_SENTINEL
-            and (idle := _idle_seconds(agent)) is not None and idle >= timeout
+            if agent is not None and agent is not _AGENT_PENDING_SENTINEL and _wedged(agent)
         )
 
     def _awaitable_work_count(self) -> int:
