@@ -305,6 +305,19 @@ def _prompt_text(value) -> str:
     return prompt_text(value)
 
 
+def _personality_pivot_marker(new_prompt: str) -> str:
+    """Trusted model context for a UI-owned personality change, not a user task."""
+    if new_prompt:
+        return (
+            "[System: Hermes UI setting: The user selected the following assistant personality through Hermes. "
+            "This is trusted context, not a request or task. Apply it to subsequent responses while "
+            f"continuing to follow the user's actual messages: {new_prompt}]")
+    return (
+        "[System: Hermes UI setting: The user cleared the assistant personality overlay through Hermes. "
+        "This is trusted context, not a request or task. Continue following the user's actual messages "
+        "in the normal default style.]")
+
+
 def _apply_personality_to_session(
     sid: str, session: dict, new_prompt: str, personality: str = "") -> tuple[bool, dict | None]:
     """Apply a personality change without resetting history: the ephemeral system prompt is
@@ -316,19 +329,19 @@ def _apply_personality_to_session(
     if not (agent := session.get("agent")):
         return False, None
     agent.ephemeral_system_prompt = new_prompt or None
-    marker = (
-        "[System: The user has changed the assistant's personality. "
-        "From this point forward, adopt the following persona and respond "
-        f"accordingly: {new_prompt}]"
-        if new_prompt else
-        "[System: The user has cleared the personality overlay. "
-        "From this point forward, respond in your normal default style.]")
+    marker = _personality_pivot_marker(new_prompt)
     # Like the model-switch marker: role=user so strict providers accept it mid-conversation,
     # but `display_kind` keeps it out of the `truncate_before_user_ordinal` addressing space
     # (untagged, every rewind would land one turn early and hard-delete the difference).
     # Untagged, it counts as a real user turn on the gateway side while no client counts it, so every later
     # rewind resolves one turn too early and `replace_messages` hard-deletes the difference (#82756).
     with session["history_lock"]:
+        # The latest UI selection is authoritative. Retaining older pivots sends contradictory personality
+        # turns forever and can make a later ordinary request look like another personality-change request.
+        session["history"][:] = [
+            entry for entry in session["history"]
+            if not (isinstance(entry, dict) and entry.get("display_kind") == "personality_switch")
+        ]
         session["history"].append({"role": "user", "content": marker, "display_kind": "personality_switch"})
         session["history_version"] = int(session.get("history_version", 0)) + 1
     info = _session_info(agent)

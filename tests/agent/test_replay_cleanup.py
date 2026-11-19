@@ -217,3 +217,19 @@ def test_untrustworthy_confirmation_stamp_fails_closed():
         out = canonicalize_replay_history(row, now=10_000.0)
         assert "EXPIRED" in out[0]["content"] and "api_content" not in out[0], untrusted
     assert canonicalize_replay_history([{"role": "user", "content": "confirm reboot"}], now=1e9)[0]["content"] == "confirm reboot"
+
+
+def test_personality_switch_marker_is_not_replayed_as_a_user_request():
+    """The active system prompt owns personality; its old UI pivot is synchronization metadata."""
+    history = [
+        {"role": "user", "content": "before"},
+        {
+            "role": "user",
+            "content": "[System: The user has changed the assistant's personality: old]",
+            "display_kind": "personality_switch",
+        },
+        {"role": "user", "content": "actual request"},
+    ]
+
+    assert canonicalize_replay_history(history, now=1.0) == [history[0], history[2]]
+    assert [message["content"] for message in _send(_SendAgent(), history)] == ["before", "actual request"]

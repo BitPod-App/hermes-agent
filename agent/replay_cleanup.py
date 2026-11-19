@@ -166,7 +166,14 @@ def canonicalize_replay_history(
         return agent_history
     if now is None:
         now = time.time()
-    cleaned = strip_interrupted_tool_tails(agent_history)
+    # A personality selection is already carried by the active ephemeral system
+    # prompt. Its role=user history row exists only to reconcile a switch that lands
+    # mid-turn; replaying it later makes an old UI action look like a fresh request.
+    cleaned = [
+        msg for msg in agent_history
+        if not (isinstance(msg, dict) and msg.get("display_kind") == "personality_switch")
+    ]
+    cleaned = strip_interrupted_tool_tails(cleaned)
     cleaned = strip_dangling_tool_call_tail(cleaned)
     return strip_stale_dangerous_confirmations(cleaned, now=now)
 

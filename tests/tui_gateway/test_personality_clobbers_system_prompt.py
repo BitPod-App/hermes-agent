@@ -30,6 +30,7 @@ config file is genuine proof of the write.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -141,3 +142,44 @@ def test_switching_personality_leaves_no_stale_text(tmp_path, monkeypatch):
         f"  expected (manual): {MANUAL_PROMPT!r}\n"
         f"  got: {saved!r}"
     )
+
+
+def test_history_marker_is_context_and_replaces_stale_pivot(monkeypatch):
+    """A UI personality pick must not masquerade as a fresh user request forever."""
+
+    class _Agent:
+        ephemeral_system_prompt = None
+
+    session = {
+        "agent": _Agent(),
+        "history": [
+            {"role": "user", "content": "real request"},
+            {
+                "role": "user",
+                "content": "[System: The user has changed the assistant's personality: old]",
+                "display_kind": "personality_switch",
+            },
+        ],
+        "history_lock": threading.Lock(),
+        "history_version": 0,
+    }
+    monkeypatch.setattr(server, "_session_info", lambda *a, **k: {})
+    monkeypatch.setattr(server, "_emit", lambda *a: None)
+
+    server._apply_personality_to_session("sid", session, "Answer tersely.", "terse")
+
+    pivots = [m for m in session["history"] if m.get("display_kind") == "personality_switch"]
+    assert len(pivots) == 1
+    marker = pivots[0]
+    assert marker["role"] == "user"  # strict-provider compatibility
+    assert marker["content"].startswith("[System: Hermes UI setting:")
+    assert "trusted context, not a request or task" in marker["content"]
+    assert "user's actual messages" in marker["content"]
+    assert "Answer tersely." in marker["content"]
+
+    server._apply_personality_to_session("sid", session, "", "")
+
+    pivots = [m for m in session["history"] if m.get("display_kind") == "personality_switch"]
+    assert len(pivots) == 1
+    assert "cleared" in pivots[0]["content"]
+    assert "Answer tersely." not in pivots[0]["content"]
